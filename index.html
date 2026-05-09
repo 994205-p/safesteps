@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SafeSteps Advanced</title>
+
+<link rel="stylesheet"
+href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
+<style>
+*{
+margin:0;
+padding:0;
+box-sizing:border-box;
+font-family:Arial,sans-serif;
+}
+
+body{
+background:#f4f7fb;
+overflow:hidden;
+}
+
+#map{
+height:100vh;
+width:100%;
+}
+
+.search-box{
+position:absolute;
+top:20px;
+left:50%;
+transform:translateX(-50%);
+z-index:1000;
+width:90%;
+max-width:500px;
+display:flex;
+gap:10px;
+}
+
+.search-box input{
+flex:1;
+padding:15px;
+border:none;
+border-radius:30px;
+font-size:16px;
+box-shadow:0 2px 10px rgba(0,0,0,0.2);
+}
+
+.search-box button{
+padding:15px 20px;
+border:none;
+border-radius:30px;
+background:#16a34a;
+color:white;
+font-weight:bold;
+cursor:pointer;
+}
+
+.info-box{
+position:absolute;
+top:90px;
+left:15px;
+z-index:1000;
+background:white;
+padding:15px;
+border-radius:15px;
+box-shadow:0 2px 10px rgba(0,0,0,0.2);
+width:250px;
+}
+
+.floating-buttons{
+position:absolute;
+right:20px;
+bottom:100px;
+z-index:1000;
+display:flex;
+flex-direction:column;
+gap:15px;
+}
+
+.float-btn{
+width:70px;
+height:70px;
+border-radius:50%;
+border:none;
+font-size:28px;
+color:white;
+cursor:pointer;
+box-shadow:0 4px 10px rgba(0,0,0,0.3);
+}
+
+.siren{
+background:#f59e0b;
+}
+
+.call{
+background:#2563eb;
+}
+
+.sos{
+background:#ff0066;
+font-size:20px;
+font-weight:bold;
+}
+
+#fakeCallScreen{
+display:none;
+position:fixed;
+top:0;
+left:0;
+width:100%;
+height:100%;
+background:black;
+color:white;
+z-index:9999;
+text-align:center;
+padding-top:150px;
+}
+
+.call-buttons{
+margin-top:50px;
+display:flex;
+justify-content:center;
+gap:40px;
+}
+
+.call-buttons button{
+width:90px;
+height:90px;
+border-radius:50%;
+border:none;
+font-size:18px;
+color:white;
+cursor:pointer;
+}
+
+.accept{
+background:green;
+}
+
+.reject{
+background:red;
+}
+
+</style>
+</head>
+<body>
+
+<div class="search-box">
+<input type="text" id="destination"
+placeholder="Search destination...">
+
+<button onclick="findSafestPath()">
+GO
+</button>
+</div>
+
+<div class="info-box">
+<h3>SafeSteps</h3>
+<br>
+<p><strong>Safety:</strong> <span id="safety">-</span></p>
+<p><strong>Distance:</strong> <span id="distance">-</span></p>
+<p><strong>Duration:</strong> <span id="duration">-</span></p>
+<p><strong>Navigation:</strong> <span id="nav">Waiting</span></p>
+</div>
+
+<div class="floating-buttons">
+<button class="float-btn siren"
+onclick="playSiren()">🔊</button>
+
+<button class="float-btn call"
+onclick="startFakeCall()">📞</button>
+
+<button class="float-btn sos"
+onclick="sendSOS()">SOS</button>
+</div>
+
+<div id="map"></div>
+
+<audio id="sirenAudio" src="siren.mp3"></audio>
+<audio id="ringtoneAudio" src="ringtone.mp3"></audio>
+
+<div id="fakeCallScreen">
+<h1>Incoming Call</h1>
+<br>
+<h2>Mom</h2>
+<br>
+<p>Mobile Calling...</p>
+
+<div class="call-buttons">
+
+<button class="accept"
+onclick="acceptCall()">
+✔
+</button>
+
+<button class="reject"
+onclick="endCall()">
+✖
+</button>
+
+</div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+
+let map;
+let userLat;
+let userLng;
+let userMarker;
+let routeLayer;
+let navigationSteps = [];
+let currentStepIndex = 0;
+
+const unsafeZones = [
+{
+lat:11.0168,
+lng:76.9558,
+radius:800,
+danger:'Unsafe Area'
+},
+{
+lat:11.0251,
+lng:76.9667,
+radius:900,
+danger:'Crime Area'
+},
+{
+lat:11.0018,
+lng:76.9629,
+radius:700,
+danger:'Dark Street'
+}
+];
+
+navigator.geolocation.watchPosition(
+position=>{
+
+userLat = position.coords.latitude;
+userLng = position.coords.longitude;
+
+if(!map){
+initMap();
+}else{
+userMarker.setLatLng([userLat,userLng]);
+checkNavigation();
+}
+
+},
+error=>{
+alert('Location permission denied');
+}
+);
+
+function initMap(){
+
+map = L.map('map').setView([userLat,userLng],14);
+
+L.tileLayer(
+'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+{
+attribution:'© OpenStreetMap contributors'
+}
+).addTo(map);
+
+userMarker = L.marker([userLat,userLng])
+.addTo(map)
+.bindPopup('You are here')
+.openPopup();
+
+unsafeZones.forEach(zone=>{
+
+L.circle([zone.lat,zone.lng],{
+color:'red',
+fillColor:'red',
+fillOpacity:0.3,
+radius:zone.radius
+}).addTo(map)
+.bindPopup(zone.danger);
+
+});
+}
+
+async function findSafestPath(){
+
+const destination =
+document.getElementById('destination').value;
+
+if(!destination){
+alert('Enter destination');
+return;
+}
+
+try{
+
+const geoResponse = await fetch(
+`https://nominatim.openstreetmap.org/search?format=json&q=${destination}`
+);
+
+const geoData = await geoResponse.json();
+
+if(geoData.length===0){
+alert('Destination not found');
+return;
+}
+
+const destLat = geoData[0].lat;
+const destLng = geoData[0].lon;
+
+L.marker([destLat,destLng])
+.addTo(map)
+.bindPopup('Destination');
+
+const routeResponse = await fetch(
+`https://router.project-osrm.org/route/v1/driving/${userLng},${userLat};${destLng},${destLat}?overview=full&steps=true&alternatives=true&geometries=geojson`
+);
+
+const routeData = await routeResponse.json();
+
+if(!routeData.routes){
+alert('Route not found');
+return;
+}
+
+let safestRoute = null;
+let bestScore = -1;
+
+routeData.routes.forEach(route=>{
+
+const score = calculateSafety(
+route.geometry.coordinates
+);
+
+if(score>bestScore){
+bestScore = score;
+safestRoute = route;
+}
+
+});
+
+if(routeLayer){
+map.removeLayer(routeLayer);
+}
+
+const latlngs = safestRoute.geometry.coordinates.map(
+coord=>[coord[1],coord[0]]
+);
+
+routeLayer = L.polyline(latlngs,{
+color:'green',
+weight:6
+}).addTo(map);
+
+map.fitBounds(routeLayer.getBounds());
+
+navigationSteps =
+safestRoute.legs[0].steps;
+
+currentStepIndex = 0;
+
+speak('Safest route started');
+
+if(navigationSteps.length>0){
+speak(navigationSteps[0].maneuver.instruction);
+}
+
+// info
+
+document.getElementById('safety').innerText=
+bestScore+'/100';
+
+
+document.getElementById('distance').innerText=
+(safestRoute.distance/1000).toFixed(2)+' km';
+
+
+document.getElementById('duration').innerText=
+Math.round(safestRoute.duration/60)+' mins';
+
+}catch(error){
+console.log(error);
+alert('Error finding route');
+}
+}
+
+function calculateSafety(coords){
+
+let score = 100;
+
+coords.forEach(coord=>{
+
+const lng = coord[0];
+const lat = coord[1];
+
+unsafeZones.forEach(zone=>{
+
+const dist = getDistance(
+lat,lng,
+zone.lat,zone.lng
+);
+
+if(dist<1){
+score -= 20;
+}
+
+});
+
+});
+
+if(score<0){
+score = 0;
+}
+
+return score;
+}
+
+function getDistance(lat1,lon1,lat2,lon2){
+
+const R = 6371;
+
+const dLat = deg2rad(lat2-lat1);
+const dLon = deg2rad(lon2-lon1);
+
+const a =
+Math.sin(dLat/2)*Math.sin(dLat/2)+
+Math.cos(deg2rad(lat1))*
+Math.cos(deg2rad(lat2))*
+Math.sin(dLon/2)*
+Math.sin(dLon/2);
+
+const c = 2*Math.atan2(
+Math.sqrt(a),
+Math.sqrt(1-a)
+);
+
+return R*c;
+}
+
+function deg2rad(deg){
+return deg*(Math.PI/180);
+}
+
+function speak(text){
+
+const speech = new SpeechSynthesisUtterance(text);
+
+speech.lang = 'en-US';
+speech.volume = 1;
+speech.rate = 1;
+speech.pitch = 1;
+
+window.speechSynthesis.speak(speech);
+
+
+document.getElementById('nav').innerText = text;
+}
+
+function checkNavigation(){
+
+if(navigationSteps.length===0){
+return;
+}
+
+if(currentStepIndex>=navigationSteps.length){
+return;
+}
+
+const step = navigationSteps[currentStepIndex];
+
+const stepLat = step.maneuver.location[1];
+const stepLng = step.maneuver.location[0];
+
+const dist = getDistance(
+userLat,userLng,
+stepLat,stepLng
+);
+
+if(dist<0.08){
+
+speak(step.maneuver.instruction);
+
+currentStepIndex++;
+}
+}
+
+function playSiren(){
+
+const siren =
+document.getElementById('sirenAudio');
+
+siren.volume = 1.0;
+siren.loop = true;
+
+siren.play();
+
+setTimeout(()=>{
+siren.pause();
+},10000);
+}
+
+function startFakeCall(){
+
+const ringtone =
+document.getElementById('ringtoneAudio');
+
+ringtone.loop = true;
+ringtone.volume = 1.0;
+ringtone.play();
+
+
+document.getElementById(
+'fakeCallScreen'
+).style.display='block';
+}
+
+function acceptCall(){
+
+const ringtone =
+document.getElementById('ringtoneAudio');
+
+ringtone.pause();
+
+speak('Call connected');
+}
+
+function endCall(){
+
+const ringtone =
+document.getElementById('ringtoneAudio');
+
+ringtone.pause();
+
+
+document.getElementById(
+'fakeCallScreen'
+).style.display='none';
+}
+
+function sendSOS(){
+
+alert(
+'SOS Alert Sent To Emergency Contacts'
+);
+
+speak('Emergency alert activated');
+}
+
+</script>
+
+
+<!-- Contact Modal -->
+<div id="contactPanel" style="
+position:fixed;
+top:0;
+right:-400px;
+width:350px;
+height:100%;
+background:white;
+z-index:9999;
+padding:20px;
+transition:0.4s;
+overflow:auto;
+box-shadow:-2px 0 10px rgba(0,0,0,0.3);
+">
+
+<h2>Emergency Contacts</h2>
+<br>
+
+<input type="text" id="contactName"
+placeholder="Contact Name"
+style="width:100%;padding:12px;margin-bottom:10px;">
+
+<input type="text" id="contactPhone"
+placeholder="Phone Number"
+style="width:100%;padding:12px;margin-bottom:10px;">
+
+<button onclick="saveContact()"
+style="width:100%;padding:12px;background:#16a34a;color:white;border:none;border-radius:10px;">
+Save Contact
+</button>
+
+<br><br>
+
+<div id="contactList"></div>
+
+<br>
+
+<button onclick="closeContacts()"
+style="width:100%;padding:12px;background:red;color:white;border:none;border-radius:10px;">
+Close
+</button>
+
+</div>
+
+<button onclick="openContacts()"
+style="
+position:absolute;
+top:20px;
+right:20px;
+z-index:1000;
+padding:15px;
+border:none;
+border-radius:50%;
+font-size:22px;
+background:white;
+box-shadow:0 2px 10px rgba(0,0,0,0.3);
+cursor:pointer;
+">
+👤
+</button>
+
+<script>
+
+// USER DATA
+let userData = {
+name:'',
+phone:''
+};
+
+let emergencyContacts =
+JSON.parse(localStorage.getItem('contacts')) || [];
+
+let travelStarted = false;
+
+// CONTACT PANEL
+function openContacts(){
+
+document.getElementById(
+'contactPanel'
+).style.right='0';
+
+renderContacts();
+}
+
+function closeContacts(){
+
+document.getElementById(
+'contactPanel'
+).style.right='-400px';
+}
+
+function saveContact(){
+
+const name =
+document.getElementById('contactName').value;
+
+const phone =
+document.getElementById('contactPhone').value;
+
+if(!name || !phone){
+alert('Enter all details');
+return;
+}
+
+emergencyContacts.push({
+name,
+phone
+});
+
+localStorage.setItem(
+'contacts',
+JSON.stringify(emergencyContacts)
+);
+
+renderContacts();
+
+alert('Contact saved');
+}
+
+function renderContacts(){
+
+const list =
+document.getElementById('contactList');
+
+list.innerHTML='';
+
+emergencyContacts.forEach(contact=>{
+
+list.innerHTML += `
+<div style="
+padding:12px;
+border:1px solid #ddd;
+border-radius:10px;
+margin-bottom:10px;
+">
+<h4>${contact.name}</h4>
+<p>${contact.phone}</p>
+</div>
+`;
+
+});
+}
+
+// START TRAVEL CONFIRMATION
+const oldFind = findSafestPath;
+
+findSafestPath = async function(){
+
+await oldFind();
+
+setTimeout(()=>{
+
+const start = confirm(
+'Do you want to start travel?'
+);
+
+if(start){
+startTravel();
+}
+
+},1000);
+}
+
+function startTravel(){
+
+travelStarted = true;
+
+speak('Travel monitoring started');
+
+alert(
+'SafeSteps is now monitoring your journey in real time'
+);
+}
+
+// OVERRIDE SOS
+sendSOS = function(){
+
+if(emergencyContacts.length===0){
+alert('No emergency contact added');
+return;
+}
+
+const locationLink =
+`https://maps.google.com/?q=${userLat},${userLng}`;
+
+const message =
+`EMERGENCY! I need help. My live location: ${locationLink}`;
+
+// open SMS app
+window.location.href =
+`sms:${emergencyContacts[0].phone}?body=${encodeURIComponent(message)}`;
+
+speak('Emergency message ready');
+
+alert(
+'SMS application opened with emergency message'
+);
+}
+
+// TRAVEL MONITORING
+setInterval(()=>{
+
+if(!travelStarted){
+return;
+}
+
+// Example monitoring logic
+
+unsafeZones.forEach(zone=>{
+
+const dist = getDistance(
+userLat,
+userLng,
+zone.lat,
+zone.lng
+);
+
+if(dist<0.5){
+
+speak(
+'Warning. You are entering unsafe area'
+);
+}
+
+});
+
+},10000);
+
+</script>
+
+</body>
+</html>
